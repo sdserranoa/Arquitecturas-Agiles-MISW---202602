@@ -1,0 +1,4 @@
+flask==3.1.*
+requests==2.*
+PyJWT==2.*
+docker==7.*

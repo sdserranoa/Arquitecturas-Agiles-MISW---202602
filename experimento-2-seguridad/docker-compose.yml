@@ -1,0 +1,81 @@
+x-jwt: &jwt
+  JWT_SECRET: ${JWT_SECRET:-solventa-secreto-dev-no-usar-en-produccion}
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: e2-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  verificador-autorizacion:
+    build: ./verificador-autorizacion
+    container_name: verificador-autorizacion
+    ports:
+      - "6002:6002"
+    environment:
+      <<: *jwt
+      REDIS_HOST: redis
+    volumes:
+      - verificador-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ms-siniestros:
+    build: ./ms-siniestros
+    container_name: ms-siniestros
+    ports:
+      - "6001:6001"
+    environment:
+      <<: *jwt
+      VERIFICADOR_URL: http://verificador-autorizacion:6002
+      VERIFICADOR_TIMEOUT: "2"
+      HABILITAR_BASELINE: "true"
+    volumes:
+      - siniestros-data:/data
+    depends_on:
+      - verificador-autorizacion
+
+  ms-alertas-auditoria:
+    build: ./ms-alertas-auditoria
+    container_name: ms-alertas-auditoria
+    ports:
+      - "6003:6003"
+    environment:
+      REDIS_HOST: redis
+    volumes:
+      - alertas-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: e2-dashboard
+    ports:
+      - "8081:5000"
+    environment:
+      <<: *jwt
+      SINIESTROS_URL: http://ms-siniestros:6001
+      VERIFICADOR_URL: http://verificador-autorizacion:6002
+      ALERTAS_URL: http://ms-alertas-auditoria:6003
+      DOCKER_SOCKET: /var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - ms-siniestros
+      - verificador-autorizacion
+      - ms-alertas-auditoria
+
+volumes:
+  verificador-data:
+  siniestros-data:
+  alertas-data:

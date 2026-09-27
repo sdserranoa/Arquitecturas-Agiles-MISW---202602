@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Experimento 2 — Elevación de privilegios</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-shield" aria-hidden="true">🛡️</span>
+      <div>
+        <h1>Detección de elevación de privilegios</h1>
+        <p class="brand-sub">Experimento 2 · ASR-SEG-09 · Solventa</p>
+      </div>
+    </div>
+    <div class="health" id="health">
+      <span class="pill" data-svc="siniestros"><i></i>Siniestros</span>
+      <span class="pill" data-svc="verificador"><i></i>Verificador</span>
+      <span class="pill" data-svc="auditoria"><i></i>Auditoría</span>
+      <span class="pill" id="docker-pill"><i></i>docker: —</span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="experimento" role="tab">Experimento</button>
+    <button class="tab" data-tab="alertas" role="tab">Centro de alertas <span class="tab-badge" id="tab-badge-alertas">0</span></button>
+    <button class="tab" data-tab="resultados" role="tab">Resultados <span class="tab-dot hidden" id="tab-dot-resultados"></span></button>
+  </nav>
+
+  <div id="manual-banner" class="banner hidden">
+    <strong>Docker no está disponible desde el dashboard.</strong>
+    Para apagar o prender el verificador ejecuta en tu terminal:
+    <code id="manual-cmd">docker stop verificador-autorizacion</code>
+    <button class="btn-mini" id="banner-close" title="Cerrar">✕</button>
+  </div>
+
+  <main>
+    <!-- ================================================= EXPERIMENTO -->
+    <section class="panel" id="tab-experimento">
+      <div class="flow card">
+        <div class="flow-head">
+          <h2>Flujo de una solicitud sensible</h2>
+          <div class="legend">
+            <span><i class="dot legit"></i>legítima</span>
+            <span><i class="dot attack"></i>ataque</span>
+            <span><i class="dot alert"></i>alerta de intrusión</span>
+          </div>
+        </div>
+        <div class="flow-row">
+          <div class="node" id="node-cliente">
+            <div class="node-icon">👥</div>
+            <div class="node-name">Clientes</div>
+            <div class="node-split">
+              <span class="ok">✓ <b id="n-legit">0</b></span>
+              <span class="bad">✕ <b id="n-attack">0</b></span>
+            </div>
+            <div class="node-label">solicitudes enviadas</div>
+          </div>
+          <div class="track" id="track-0"><div class="line"></div><span class="track-cap">JWT Bearer</span></div>
+          <div class="node" id="node-siniestros">
+            <div class="node-icon">🏦</div>
+            <div class="node-name">MS Siniestros</div>
+            <div class="node-counter" id="n-aprobaciones">–</div>
+            <div class="node-label">aprobaciones ejecutadas</div>
+            <div class="node-flash" id="flash-siniestros"></div>
+          </div>
+          <div class="track" id="track-1"><div class="line"></div><span class="track-cap">REST síncrono</span></div>
+          <div class="node guard" id="node-verificador">
+            <div class="node-icon">🛡️</div>
+            <div class="node-name">Verificador central</div>
+            <div class="node-counter"><span id="n-intrusiones">–</span><small> / <span id="n-verificaciones">–</span></small></div>
+            <div class="node-label">intrusiones / verificaciones</div>
+            <div class="sot">🗄️ fuente de verdad de roles</div>
+            <div class="chip" id="chip-verificador">—</div>
+            <div class="node-flash" id="flash-verificador"></div>
+          </div>
+          <div class="track alert-track" id="track-2"><div class="line"></div><span class="track-cap">XADD asíncrono</span></div>
+          <div class="node" id="node-bus">
+            <div class="node-icon">📨</div>
+            <div class="node-name">Bus Redis</div>
+            <div class="node-counter" id="n-pendientes">–</div>
+            <div class="node-label">alertas pendientes</div>
+          </div>
+          <div class="track alert-track" id="track-3"><div class="line"></div><span class="track-cap">XREAD</span></div>
+          <div class="node" id="node-auditoria">
+            <div class="node-icon">📋</div>
+            <div class="node-name">Auditoría</div>
+            <div class="node-counter" id="n-alertas">–</div>
+            <div class="node-label">alertas registradas</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="card">
+          <h2>Experimento automático</h2>
+          <p class="hint">Mezcla aleatoria (semilla fija) de solicitudes legítimas y de los 7 tipos de ataque. Después mide la detección, los falsos positivos, la integridad y el sobrecosto de latencia contra la ruta con RBAC local.</p>
+          <div class="form-grid">
+            <label>Legítimas <input type="number" id="in-legitimas" value="60" min="1" max="2000"></label>
+            <label>Ataques <input type="number" id="in-ataques" value="70" min="1" max="2000"></label>
+            <label>Pares de latencia <input type="number" id="in-latencia" value="100" min="5" max="1000"></label>
+            <label>Pausa entre solicitudes <span class="range"><input type="range" id="in-pausa" min="0" max="500" step="10" value="120"><output id="out-pausa">120 ms</output></span></label>
+          </div>
+          <button class="btn primary wide" id="btn-iniciar">▶ Empezar experimento</button>
+          <div class="progress hidden" id="progress">
+            <ol class="steps" id="steps">
+              <li data-fase="preparando">Preparar</li>
+              <li data-fase="enviando">Enviar</li>
+              <li data-fase="auditando">Auditar</li>
+              <li data-fase="midiendo_latencia">Latencia</li>
+              <li data-fase="reporte">Reporte</li>
+            </ol>
+            <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+            <div class="progress-meta" id="progress-meta">—</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Disparo manual</h2>
+          <p class="hint">Envía una sola solicitud y mira cómo la trata el verificador.</p>
+          <label class="stack">Ataque (vulnerabilidad materializada)
+            <select id="sel-ataque"></select>
+          </label>
+          <p class="desc" id="desc-ataque">—</p>
+          <div class="row">
+            <button class="btn danger" id="btn-ataque">Lanzar ataque</button>
+            <button class="btn ghost" id="btn-todos">Lanzar los 7</button>
+          </div>
+          <label class="stack">Solicitud legítima
+            <select id="sel-legitima"></select>
+          </label>
+          <p class="desc" id="desc-legitima">—</p>
+          <button class="btn success" id="btn-legitima">Enviar legítima</button>
+          <div class="result hidden" id="manual-result"></div>
+        </div>
+
+        <div class="card">
+          <h2>Disponibilidad y fuente de verdad</h2>
+          <div class="row between">
+            <div>
+              <div class="kv-label">Verificador</div>
+              <div class="chip" id="chip-verificador-2">—</div>
+            </div>
+            <div class="row">
+              <button class="btn danger" id="btn-stop">Apagar</button>
+              <button class="btn success" id="btn-start">Encender</button>
+            </div>
+          </div>
+          <p class="hint">Con el verificador apagado, Siniestros niega todo con <b>503</b> (fail-closed): es el costo en disponibilidad del punto único de control.</p>
+          <div class="kv-label">Roles activos · editar un rol invalida al instante los tokens ya emitidos</div>
+          <table class="users" id="tabla-usuarios"><tbody><tr><td class="muted">cargando…</td></tr></tbody></table>
+          <div class="row between">
+            <button class="btn ghost" id="btn-reset">Reiniciar datos a 0</button>
+            <span class="feedback" id="feedback"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpis" id="kpis-vivo">
+        <div class="kpi"><span class="kpi-label">Verificaciones</span><span class="kpi-value" id="k-verif">–</span></div>
+        <div class="kpi"><span class="kpi-label">Autorizadas</span><span class="kpi-value" id="k-autorizadas">–</span></div>
+        <div class="kpi"><span class="kpi-label">Intrusiones detectadas</span><span class="kpi-value" id="k-intrusiones">–</span></div>
+        <div class="kpi"><span class="kpi-label">Alertas registradas</span><span class="kpi-value" id="k-alertas">–</span></div>
+        <div class="kpi"><span class="kpi-label">Aprobaciones ejecutadas</span><span class="kpi-value" id="k-aprob">–</span></div>
+        <div class="kpi"><span class="kpi-label">Detección → registro p95</span><span class="kpi-value" id="k-lat-alerta">–</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Solicitudes en vivo</h2>
+          <span class="muted small" id="feed-count">0 solicitudes</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data" id="tabla-feed">
+            <thead><tr><th>Hora</th><th>Origen</th><th>Escenario</th><th>Clase</th><th>HTTP</th><th>Decisión</th><th class="num">ms</th></tr></thead>
+            <tbody><tr class="empty"><td colspan="7">Aún no hay solicitudes. Corre el experimento o usa el disparo manual.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================= CENTRO DE ALERTAS -->
+    <section class="panel hidden" id="tab-alertas">
+      <div class="kpis">
+        <div class="kpi hero"><span class="kpi-label">Alertas de intrusión</span><span class="kpi-value" id="a-total">–</span></div>
+        <div class="kpi"><span class="kpi-label">Último minuto</span><span class="kpi-value" id="a-minuto">–</span></div>
+        <div class="kpi"><span class="kpi-label">Detección → registro p50</span><span class="kpi-value" id="a-p50">–</span></div>
+        <div class="kpi"><span class="kpi-label">Detección → registro p95</span><span class="kpi-value" id="a-p95">–</span></div>
+        <div class="kpi"><span class="kpi-label">Usuarios implicados</span><span class="kpi-value" id="a-usuarios">–</span></div>
+        <div class="kpi"><span class="kpi-label">Duplicados descartados</span><span class="kpi-value" id="a-dup">–</span></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h2>Alertas por motivo</h2>
+          <p class="hint">Cada motivo corresponde a una regla del verificador.</p>
+          <div id="chart-motivos" class="chart"></div>
+          <h3 class="sub-h">Usuarios con más alertas</h3>
+          <p class="hint">Una cuenta que acumula intentos es candidata a estar comprometida.</p>
+          <div id="chart-usuarios" class="chart"></div>
+        </div>
+        <div class="card">
+          <h2>Alertas en el tiempo</h2>
+          <p class="hint" id="hint-tiempo">Alertas registradas por intervalo, apiladas por motivo.</p>
+          <div id="chart-tiempo" class="chart"></div>
+          <div class="legend" id="legend-tiempo"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Registro de intrusiones</h2>
+          <div class="filters">
+            <div class="chips" id="filtro-motivos"></div>
+            <input type="search" id="buscar" placeholder="Buscar usuario o solicitud…">
+          </div>
+        </div>
+        <div class="table-wrap tall">
+          <table class="data" id="tabla-alertas">
+            <thead><tr><th>Hora</th><th>Motivo</th><th>Usuario</th><th>Rol declarado → rol real</th><th>Operación</th><th>Solicitud</th><th class="num">Registro</th></tr></thead>
+            <tbody><tr class="empty"><td colspan="7">Sin alertas registradas.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================================================== RESULTADOS -->
+    <section class="panel hidden" id="tab-resultados">
+      <div class="empty-state" id="res-vacio">
+        <div class="empty-icon">🧪</div>
+        <h2>Aún no hay resultados</h2>
+        <p>Corre el experimento automático desde la pestaña <b>Experimento</b>. El reporte aparece aquí al terminar.</p>
+      </div>
+
+      <div id="res-contenido" class="hidden">
+        <div class="verdict" id="verdict">
+          <div class="verdict-icon" id="verdict-icon">✓</div>
+          <div class="verdict-text">
+            <div class="verdict-title" id="verdict-title">Hipótesis confirmada</div>
+            <div class="verdict-sub" id="verdict-sub">—</div>
+          </div>
+          <div class="verdict-actions">
+            <select id="sel-historial" title="Corridas anteriores"></select>
+            <button class="btn ghost" id="btn-descargar">⬇ JSON</button>
+          </div>
+        </div>
+
+        <div class="criteria" id="criteria"></div>
+
+        <div class="card">
+          <h2>Detección por escenario</h2>
+          <div class="table-wrap free">
+            <table class="data" id="tabla-escenarios">
+              <thead><tr><th>Escenario</th><th>Descripción</th><th>Decisión esperada</th><th class="num">Enviadas</th><th>Resultado</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h2>Sobrecosto de latencia</h2>
+            <p class="hint">Aprobación con RBAC local sobre el token vs. con el salto al verificador central (pares alternados).</p>
+            <div class="lat-stats" id="lat-stats"></div>
+            <div id="chart-latencia" class="chart"></div>
+            <div class="legend" id="legend-latencia"></div>
+          </div>
+          <div class="card">
+            <h2>Alertas de la corrida por motivo</h2>
+            <p class="hint">Deben sumar exactamente el número de ataques: una alerta por intrusión.</p>
+            <div id="chart-motivos-corrida" class="chart"></div>
+            <div class="table-note" id="nota-motivos"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Historial de corridas</h2>
+          <div class="table-wrap">
+            <table class="data" id="tabla-historial">
+              <thead><tr><th>Fecha</th><th class="num">Legítimas</th><th class="num">Ataques</th><th class="num">Detección</th><th class="num">Falsos positivos</th><th class="num">Aprob. indebidas</th><th class="num">Sobrecosto p95</th><th>Veredicto</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="tooltip hidden" id="tooltip" role="tooltip"></div>
+  <div class="toast hidden" id="toast"></div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
